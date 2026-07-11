@@ -7,7 +7,7 @@ from datetime import datetime
 from telegram import Update
 from telegram.ext import Application, CommandHandler, ContextTypes
 
-BOT_TOKEN = "8890602313:AAFaJRgHEP6yM7DrwkT5PwxRabKuqa4Bnlw"
+BOT_TOKEN = os.environ.get("BOT_TOKEN")
 ADMIN_CHAT_ID = 8355378781
 COMPOSE_DIRS = {
     "empire-n8n": "/opt/n8n",
@@ -266,6 +266,12 @@ async def cmd_ip(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 def main():
+    if not BOT_TOKEN:
+        raise RuntimeError(
+            "BOT_TOKEN environment variable is not set. "
+            "Copy .env.example to .env and fill in your bot token, "
+            "or export BOT_TOKEN before running this script."
+        )
     logging.info("Starting Empire Server Command Bot...")
     app = Application.builder().token(BOT_TOKEN).build()
     handlers = [
