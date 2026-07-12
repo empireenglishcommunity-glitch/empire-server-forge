@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
+import html
 import os
 import subprocess
 import asyncio
 import logging
-from datetime import datetime
+from datetime import datetime, timezone
 from telegram import Update
 from telegram.ext import Application, CommandHandler, ContextTypes
 
@@ -18,6 +19,7 @@ COMPOSE_DIRS = {
     "emos-postgres": "/opt/emos-db",
 }
 ALL_CONTAINERS = list(COMPOSE_DIRS.keys())
+MAX_LOG_LINES = 200
 NL = chr(10)
 logging.basicConfig(
     format="%(asctime)s - %(levelname)s - %(message)s", level=logging.INFO
@@ -27,10 +29,45 @@ logging.basicConfig(
 def admin_only(func):
     async def wrapper(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if update.effective_chat.id != ADMIN_CHAT_ID:
+            logging.warning(
+                "Unauthorized access attempt from chat_id=%s", update.effective_chat.id
+            )
             return
-        return await func(update, context)
+        try:
+            return await func(update, context)
+        except Exception:
+            logging.exception("Unhandled error in /%s", func.__name__)
+            try:
+                await update.message.reply_text(
+                    "\u26a0\ufe0f Internal error. Check server logs."
+                )
+            except Exception:
+                pass
 
     return wrapper
+
+
+class CmdResult:
+    """Wraps a shell command result with explicit success/failure, so
+    callers can distinguish 'command ran and printed nothing interesting'
+    from 'command actually failed' instead of guessing from output text."""
+
+    def __init__(self, output, ok, returncode=None):
+        self.output = output
+        self.ok = ok
+        self.returncode = returncode
+
+    def __str__(self):
+        return self.output
+
+    def __eq__(self, other):
+        return self.output == other
+
+    def __contains__(self, item):
+        return item in self.output
+
+    def __hash__(self):
+        return hash(self.output)
 
 
 def run(cmd, timeout=30):
@@ -38,61 +75,99 @@ def run(cmd, timeout=30):
         r = subprocess.run(
             cmd, shell=True, capture_output=True, text=True, timeout=timeout
         )
-        return r.stdout.strip() or r.stderr.strip() or "(no output)"
+        stdout = r.stdout.strip()
+        stderr = r.stderr.strip()
+        if r.returncode != 0:
+            combined = stderr or stdout or "(no output)"
+            logging.warning("cmd failed (rc=%d): %s \u2014 %s", r.returncode, cmd, combined)
+            return CmdResult(combined, ok=False, returncode=r.returncode)
+        return CmdResult(stdout or "(no output)", ok=True, returncode=0)
     except subprocess.TimeoutExpired:
-        return "Timed out"
+        logging.error("cmd timed out after %ds: %s", timeout, cmd)
+        return CmdResult("Timed out", ok=False)
     except Exception as e:
-        return str(e)
+        logging.exception("cmd exception: %s", cmd)
+        return CmdResult(str(e), ok=False)
 
 
 def get_cpu():
-    out = run("grep 'cpu ' /proc/stat")
-    parts = out.split()
-    if len(parts) >= 5:
-        idle = int(parts[4])
-        total = sum(int(x) for x in parts[1:])
-        if total > 0:
-            return str(int(100 * (total - idle) / total))
-    return run("top -bn1 -d0 | grep 'Cpu' | head -1 | grep -oP '[0-9.]+' | head -2 | paste -sd+ | bc | xargs printf '%.0f'")
+    out = str(run("grep 'cpu ' /proc/stat"))
+    try:
+        parts = out.split()
+        if len(parts) >= 5:
+            idle = int(parts[4])
+            total = sum(int(x) for x in parts[1:])
+            if total > 0:
+                return str(int(100 * (total - idle) / total))
+    except (ValueError, IndexError):
+        logging.warning("Failed to parse /proc/stat output: %s", out)
+    fallback = run(
+        "top -bn1 -d0 | grep 'Cpu' | head -1 | grep -oP '[0-9.]+' | head -2 | paste -sd+ | bc | xargs printf '%.0f'"
+    )
+    return str(fallback) if fallback.ok else "?"
+
+
+def parse_mem_line(flag=""):
+    out = str(run("free" + (" " + flag if flag else "")))
+    for line in out.split(NL):
+        if "Mem:" in line:
+            return line.split()
+    return None
 
 
 def get_ram():
-    out = run("free")
-    for line in out.split(NL):
-        if "Mem:" in line:
-            parts = line.split()
+    parts = parse_mem_line()
+    if parts and len(parts) >= 3:
+        try:
             total = int(parts[1])
             used = int(parts[2])
             if total > 0:
                 return str(int(100 * used / total))
+        except ValueError:
+            logging.warning("Failed to parse free output: %s", parts)
     return "?"
 
 
 def get_ram_detail():
-    out = run("free -h")
-    for line in out.split(NL):
-        if "Mem:" in line:
-            parts = line.split()
-            return parts[2] + " / " + parts[1]
+    parts = parse_mem_line("-h")
+    if parts and len(parts) >= 3:
+        return parts[2] + " / " + parts[1]
     return "?"
 
 
-def get_disk():
-    out = run("df -h /")
+def parse_disk_line():
+    out = str(run("df -h /"))
     for line in out.split(NL):
         if "/" in line and "Filesystem" not in line:
-            parts = line.split()
-            return parts[2] + " / " + parts[1] + " (" + parts[4] + ")"
+            return line.split()
+    return None
+
+
+def get_disk():
+    parts = parse_disk_line()
+    if parts and len(parts) >= 5:
+        return parts[2] + " / " + parts[1] + " (" + parts[4] + ")"
     return "?"
 
 
 def get_disk_overview():
-    out = run("df -h /")
-    for line in out.split(NL):
-        if "/" in line and "Filesystem" not in line:
-            p = line.split()
-            return "Total: " + p[1] + " | Used: " + p[2] + " | Free: " + p[3] + " | " + p[4]
+    parts = parse_disk_line()
+    if parts and len(parts) >= 5:
+        return "Total: " + parts[1] + " | Used: " + parts[2] + " | Free: " + parts[3] + " | " + parts[4]
     return "?"
+
+
+def resolve_container(name):
+    """Fuzzy-match a container name against ALL_CONTAINERS. Returns the
+    exact match, the single fuzzy match, or None (ambiguous/no match)."""
+    if name in ALL_CONTAINERS:
+        return name
+    matches = [c for c in ALL_CONTAINERS if name in c]
+    return matches[0] if len(matches) == 1 else None
+
+
+def container_usage_msg(command):
+    return "Usage: /" + command + " &lt;name&gt;" + NL + NL + "<code>" + NL.join(ALL_CONTAINERS) + "</code>"
 
 
 @admin_only
@@ -122,56 +197,63 @@ async def cmd_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
     up = run("uptime -p")
     ct = run("docker ps -a --format '{{.Names}}|{{.Status}}' | sort")
     clines = []
-    for l in ct.split(NL):
-        if "|" in l:
-            n, s = l.split("|", 1)
-            if "Up" in s:
-                if "unhealthy" in s:
-                    i = "\U0001f7e1"
-                elif "healthy" in s:
-                    i = "\U0001f7e2"
+    if not ct.ok:
+        clines.append("  \u26a0\ufe0f Failed to list containers")
+    else:
+        for l in str(ct).split(NL):
+            if "|" in l:
+                n, s = l.split("|", 1)
+                if "Up" in s:
+                    if "unhealthy" in s:
+                        i = "\U0001f7e1"
+                    elif "healthy" in s:
+                        i = "\U0001f7e2"
+                    else:
+                        i = "\U0001f535"
                 else:
-                    i = "\U0001f535"
-            else:
-                i = "\U0001f534"
-            clines.append("  " + i + " " + n)
+                    i = "\U0001f534"
+                clines.append("  " + i + " " + html.escape(n))
     tunnel = run("systemctl is-active cloudflared")
     monitor = run("systemctl is-active empire-monitor.timer")
     text = "\U0001f3db\ufe0f <b>Empire Status</b>" + NL
-    text += "\u23f0 " + datetime.utcnow().strftime("%Y-%m-%d %H:%M UTC") + NL + NL
+    text += "\u23f0 " + datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC") + NL + NL
     text += "<b>Resources:</b>" + NL
-    text += "  CPU: " + cpu + "%" + NL
-    text += "  RAM: " + ram + "% (" + ram_d + ")" + NL
-    text += "  Disk: " + disk + NL
-    text += "  " + up + NL + NL
+    text += "  CPU: " + html.escape(cpu) + "%" + NL
+    text += "  RAM: " + html.escape(ram) + "% (" + html.escape(ram_d) + ")" + NL
+    text += "  Disk: " + html.escape(disk) + NL
+    text += "  " + html.escape(str(up)) + NL + NL
     text += "<b>Containers:</b>" + NL + NL.join(clines) + NL + NL
     text += "<b>Services:</b>" + NL
-    text += "  Tunnel: " + tunnel + NL
-    text += "  Monitor: " + monitor
+    text += "  Tunnel: " + html.escape(str(tunnel)) + NL
+    text += "  Monitor: " + html.escape(str(monitor))
     await msg.edit_text(text, parse_mode="HTML")
 
 
 @admin_only
 async def cmd_logs(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not context.args:
-        await update.message.reply_text(
-            "Usage: /logs &lt;name&gt;" + NL + NL + "<code>" + NL.join(ALL_CONTAINERS) + "</code>",
-            parse_mode="HTML",
-        )
+        await update.message.reply_text(container_usage_msg("logs"), parse_mode="HTML")
         return
-    container = context.args[0]
-    num = int(context.args[1]) if len(context.args) > 1 else 15
-    if container not in ALL_CONTAINERS:
-        matches = [c for c in ALL_CONTAINERS if container in c]
-        container = matches[0] if len(matches) == 1 else None
+    raw_name = context.args[0]
+    try:
+        num = int(context.args[1]) if len(context.args) > 1 else 15
+    except ValueError:
+        await update.message.reply_text("\u26a0\ufe0f Line count must be a number.")
+        return
+    num = max(1, min(num, MAX_LOG_LINES))
+    container = resolve_container(raw_name)
     if not container:
-        await update.message.reply_text("Unknown container")
+        matches = [c for c in ALL_CONTAINERS if raw_name in c]
+        hint = ("Did you mean: " + ", ".join(matches)) if matches else "No matching container"
+        await update.message.reply_text("\u26a0\ufe0f Unknown container. " + hint)
         return
-    output = run("docker logs " + container + " --tail=" + str(num) + " 2>&1", timeout=10)
+    result = run("docker logs " + container + " --tail=" + str(num) + " 2>&1", timeout=10)
+    output = html.escape(str(result))
     if len(output) > 3800:
         output = "...truncated" + NL + output[-3800:]
+    prefix = "\U0001f4cb" if result.ok else "\u26a0\ufe0f"
     await update.message.reply_text(
-        "\U0001f4cb <b>" + container + "</b>" + NL + NL + "<pre>" + output + "</pre>",
+        prefix + " <b>" + html.escape(container) + "</b>" + NL + NL + "<pre>" + output + "</pre>",
         parse_mode="HTML",
     )
 
@@ -179,25 +261,30 @@ async def cmd_logs(update: Update, context: ContextTypes.DEFAULT_TYPE):
 @admin_only
 async def cmd_restart(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not context.args:
-        await update.message.reply_text(
-            "Usage: /restart &lt;name&gt;" + NL + "<code>" + NL.join(ALL_CONTAINERS) + "</code>",
-            parse_mode="HTML",
-        )
+        await update.message.reply_text(container_usage_msg("restart"), parse_mode="HTML")
         return
-    container = context.args[0]
-    if container not in COMPOSE_DIRS:
-        matches = [c for c in ALL_CONTAINERS if container in c]
-        container = matches[0] if len(matches) == 1 else None
+    container = resolve_container(context.args[0])
     if not container:
         await update.message.reply_text("Unknown container")
         return
     msg = await update.message.reply_text("\U0001f504 Restarting " + container + "...")
     d = COMPOSE_DIRS[container]
-    run("cd " + d + " && docker compose restart", timeout=60)
+    restart_result = run("cd " + d + " && docker compose restart", timeout=60)
+    if not restart_result.ok:
+        await msg.edit_text(
+            "\u274c <b>" + html.escape(container) + "</b> restart failed" + NL
+            + "<pre>" + html.escape(str(restart_result)) + "</pre>",
+            parse_mode="HTML",
+        )
+        return
     await asyncio.sleep(10)
     st = run("docker inspect --format='{{.State.Status}}' " + container)
-    icon = "\u2705" if st == "running" else "\u26a0\ufe0f"
-    await msg.edit_text(icon + " <b>" + container + "</b>: " + st, parse_mode="HTML")
+    status_text = str(st)
+    icon = "\u2705" if status_text == "running" else "\u26a0\ufe0f"
+    await msg.edit_text(
+        icon + " <b>" + html.escape(container) + "</b>: " + html.escape(status_text),
+        parse_mode="HTML",
+    )
 
 
 @admin_only
@@ -206,40 +293,48 @@ async def cmd_disk(update: Update, context: ContextTypes.DEFAULT_TYPE):
     bd = run("du -sh /var/lib/docker/ /opt/ /var/log/ /tmp/ 2>/dev/null | sort -rh")
     dd = run("docker system df")
     text = "\U0001f4be <b>Disk</b>" + NL + NL
-    text += "<b>" + ov + "</b>" + NL + NL
-    text += "<pre>" + bd + "</pre>" + NL + NL
-    text += "<pre>" + dd + "</pre>"
+    text += "<b>" + html.escape(ov) + "</b>" + NL + NL
+    text += "<pre>" + html.escape(str(bd)) + "</pre>" + NL + NL
+    text += "<pre>" + html.escape(str(dd)) + "</pre>"
     await update.message.reply_text(text, parse_mode="HTML")
 
 
 @admin_only
 async def cmd_backup(update: Update, context: ContextTypes.DEFAULT_TYPE):
     msg = await update.message.reply_text("\U0001f504 Running backup...")
-    run("/opt/backups/backup-n8n.sh 2>&1", timeout=120)
+    backup_result = run("/opt/backups/backup-n8n.sh 2>&1", timeout=120)
     n = run("ls -lht /opt/backups/n8n/ 2>/dev/null | head -3")
     a = run("ls -lht /opt/backups/assessment/ 2>/dev/null | head -3")
-    text = "\u2705 <b>Backup Done</b>" + NL + NL
-    text += "<pre>" + n + "</pre>" + NL + NL
-    text += "<pre>" + a + "</pre>"
+    if backup_result.ok:
+        icon = "\u2705"
+        title = "Backup Done"
+    else:
+        icon = "\u26a0\ufe0f"
+        title = "Backup may have failed (exit code " + str(backup_result.returncode) + ")"
+    text = icon + " <b>" + title + "</b>" + NL + NL
+    if not backup_result.ok:
+        text += "<pre>" + html.escape(str(backup_result)) + "</pre>" + NL + NL
+    text += "<b>n8n backups:</b>" + NL + "<pre>" + html.escape(str(n)) + "</pre>" + NL + NL
+    text += "<b>Assessment backups:</b>" + NL + "<pre>" + html.escape(str(a)) + "</pre>"
     await msg.edit_text(text, parse_mode="HTML")
 
 
 @admin_only
 async def cmd_uptime(update: Update, context: ContextTypes.DEFAULT_TYPE):
     u = run("uptime")
-    l = run("cat /proc/loadavg")
-    parts = l.split()
-    load = " ".join(parts[:3]) if len(parts) >= 3 else l
+    loadavg = str(run("cat /proc/loadavg"))
+    parts = loadavg.split()
+    load = " ".join(parts[:3]) if len(parts) >= 3 else loadavg
     text = "\u23f1\ufe0f <b>Uptime</b>" + NL + NL
-    text += "<pre>" + u + "</pre>" + NL
-    text += "Load (1/5/15): " + load
+    text += "<pre>" + html.escape(str(u)) + "</pre>" + NL
+    text += "Load (1/5/15): " + html.escape(load)
     await update.message.reply_text(text, parse_mode="HTML")
 
 
 @admin_only
 async def cmd_services(update: Update, context: ContextTypes.DEFAULT_TYPE):
     o = run("docker stats --no-stream --format 'table {{.Name}}\t{{.CPUPerc}}\t{{.MemUsage}}\t{{.MemPerc}}'")
-    text = "\U0001f433 <b>Resources</b>" + NL + NL + "<pre>" + o + "</pre>"
+    text = "\U0001f433 <b>Resources</b>" + NL + NL + "<pre>" + html.escape(str(o)) + "</pre>"
     await update.message.reply_text(text, parse_mode="HTML")
 
 
@@ -248,8 +343,8 @@ async def cmd_ram(update: Update, context: ContextTypes.DEFAULT_TYPE):
     f = run("free -h")
     t = run("ps aux --sort=-%mem | head -6 | tail -5 | awk '{print $11, $4}'")
     text = "\U0001f9e0 <b>Memory</b>" + NL + NL
-    text += "<pre>" + f + "</pre>" + NL + NL
-    text += "<b>Top:</b>" + NL + "<pre>" + t + "</pre>"
+    text += "<pre>" + html.escape(str(f)) + "</pre>" + NL + NL
+    text += "<b>Top:</b>" + NL + "<pre>" + html.escape(str(t)) + "</pre>"
     await update.message.reply_text(text, parse_mode="HTML")
 
 
@@ -259,10 +354,21 @@ async def cmd_ip(update: Update, context: ContextTypes.DEFAULT_TYPE):
     hn = run("hostname")
     tun = run("systemctl is-active cloudflared")
     text = "\U0001f310 <b>Network</b>" + NL + NL
-    text += "IPv4: <code>" + ip + "</code>" + NL
-    text += "Host: <code>" + hn + "</code>" + NL
-    text += "Tunnel: " + tun
+    text += "IPv4: <code>" + html.escape(str(ip)) + "</code>" + NL
+    text += "Host: <code>" + html.escape(str(hn)) + "</code>" + NL
+    text += "Tunnel: " + html.escape(str(tun))
     await update.message.reply_text(text, parse_mode="HTML")
+
+
+async def error_handler(update, context: ContextTypes.DEFAULT_TYPE):
+    """Global fallback for exceptions not already caught by admin_only's
+    own try/except (e.g. errors during Telegram's own update dispatch)."""
+    logging.error("Unhandled exception: %s", context.error, exc_info=context.error)
+    if update and getattr(update, "message", None):
+        try:
+            await update.message.reply_text("\u26a0\ufe0f Internal error. Check server logs.")
+        except Exception:
+            pass
 
 
 def main():
@@ -284,6 +390,7 @@ def main():
     ]
     for cmd, fn in handlers:
         app.add_handler(CommandHandler(cmd, fn))
+    app.add_error_handler(error_handler)
     app.run_polling(allowed_updates=Update.ALL_TYPES)
 
 
