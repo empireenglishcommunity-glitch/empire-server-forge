@@ -31,6 +31,7 @@ commit from both sources is preserved and browsable in this repo's log.
 
 | Path | Purpose |
 |------|---------|
+| `docs/` | Design docs and operational runbooks for infrastructure subsystems |
 | `n8n-mcp/` | MCP server exposing n8n workflow management to AI agent tooling |
 | `n8n-workflows/` | Exported n8n workflow JSON (bot automations, imports) |
 | `server-hardening/` | Hetzner VPS security/monitoring/backup scripts |
