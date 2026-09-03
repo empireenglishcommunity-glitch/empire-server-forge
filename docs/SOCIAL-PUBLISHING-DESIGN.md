@@ -11,6 +11,12 @@ export — uploading to six destinations across two brands, writing
 per-platform copy, scheduling, and tracking what went where — is manual and
 costs 30–60 minutes a day. This pipeline removes that.
 
+> **Upstream:** the *editing* half — turning long-form footage into finished
+> 9:16 clips in a routing folder — is addressed separately in
+> [`AUTO-EDIT-STAGE-DESIGN.md`](./AUTO-EDIT-STAGE-DESIGN.md). That stage
+> feeds this one; the hand-off is "a file appears in a routing folder" and
+> nothing below changes.
+
 ---
 
 ## 1. Destinations
