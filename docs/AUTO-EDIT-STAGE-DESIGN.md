@@ -8,6 +8,14 @@
 > `SYSTEM-MAP.md` in the same PR that deploys it.
 >
 > Downstream design it feeds: [`SOCIAL-PUBLISHING-DESIGN.md`](./SOCIAL-PUBLISHING-DESIGN.md).
+>
+> **Revision (post repo-audit):** §3–§5, §7–§8 were revised after auditing
+> the wider org. Heavy compute moved from the owner's 8GB laptop CPU to
+> Kaggle's free GPU tier, **reusing the proven remote-exec bridge pattern
+> from `macal-empire-image-forge`**. Moment-scoring can use the local Ollama
+> already installed by `macal-overseer`. Caption/hashtag style reuses the
+> existing `tiktok-captions-*.md` brand library. The point of the revision
+> was to stop duplicating infrastructure this org already runs.
 
 ---
 
@@ -66,7 +74,8 @@ it is the same open components this ecosystem already uses, assembled:
 |---|---|---|
 | Transcription (word-level) | faster-whisper | Yes — publishing pipeline uses Whisper for caption drafting |
 | Scene boundaries | PySceneDetect | New, but pure-Python, no service |
-| Moment selection | Google Gemini 3.1 Flash-Lite | New — free tier, see §4 |
+| Moment selection | Gemini free tier **or** local Ollama `qwen3:8b` | Ollama already installed by `macal-overseer` — see §4 |
+| Free GPU compute | Kaggle T4×2, driven by `remote_exec_bridge.py` | **Yes — `macal-empire-image-forge` already runs this** |
 | 9:16 reframe (face-tracked) | MediaPipe + YOLOv8 fallback | New |
 | Cut + burn captions | FFmpeg | Yes — ubiquitous |
 | Orchestration for agents | native MCP server + n8n workflow + CLI | **Yes — we already run n8n + an n8n-MCP server** |
@@ -77,109 +86,168 @@ and this org already runs both (`n8n-mcp/`, `bot.empireenglish.online`). The
 editing stage becomes another node the same agent tooling can drive, not a
 second orchestration system to babysit.
 
-Fallback if OpenShorts proves too heavy for the hardware (see §3): the same
-result is reproducible from its parts — `faster-whisper` +
-`PySceneDetect` + `FFmpeg` in a single CLI script, dropping the Gemini
-moment-scoring for a simpler silence/scene heuristic. Lower quality clip
-selection, identical output contract. Kept as a documented Plan B, not built
-unless needed.
+Fallback if OpenShorts proves awkward to run headless in a Kaggle session
+(see §3): the same result is reproducible from its parts — `faster-whisper`
++ `PySceneDetect` + `FFmpeg` in a single CLI script invoked over the same
+remote-exec bridge, with local-Ollama or a silence/scene heuristic for
+moment-scoring. Lower-quality clip selection, identical output contract and
+identical compute path. Kept as a documented Plan B, not built unless
+needed.
 
 ---
 
-## 3. Where it runs — the hardware decision is the whole design
+## 3. Where it runs — reuse the free-GPU pattern this org already built
 
-This is the constraint that shapes everything, so it is decided here
-explicitly rather than left to setup.
+> **This section was rewritten after auditing the wider codebase.** An
+> earlier draft put the heavy processing on the owner's 8GB laptop CPU. That
+> was wrong: the org has already solved "run a GPU workload at $0" and it
+> would be a duplication — and a much slower one — to ignore it.
 
-**It does NOT run on the Hetzner box.** `empire-n8n` (77.42.43.250) is a
-~4GB-RAM VPS — `server-hardening/scripts/01-swap-setup.sh` exists precisely
-because it OOM-crashed, and the n8n container is already capped at
-2560M / 1.5 cores. Video transcription + MediaPipe face tracking + FFmpeg
-re-encoding is the single most CPU- and RAM-hungry workload in the whole
-ecosystem. Putting it on the box that runs the live student-facing bot would
-reintroduce exactly the OOM failure mode the hardening package was built to
-close. **Non-negotiable: the editing stage never shares a host with the
+Three hosts already exist in this ecosystem. The editing stage's compute
+goes to the one built for exactly this.
+
+**NOT the Hetzner box.** `empire-n8n` (77.42.43.250) is a ~4GB-RAM VPS —
+`server-hardening/scripts/01-swap-setup.sh` exists precisely because it
+OOM-crashed, and the n8n container is already capped at 2560M / 1.5 cores.
+Video transcription + MediaPipe face tracking + FFmpeg re-encoding is the
+single most CPU/RAM-hungry workload in the ecosystem. Running it beside the
+live student bot reintroduces the exact OOM failure the hardening package
+closed. **Non-negotiable: the editing stage never shares a host with the
 production bot.**
 
-**It runs on the owner's PC.** i5-1135G7 / 8GB RAM / Iris Xe (no discrete
-GPU) / Windows 11 + WSL2 + Docker. This is the only free hardware available,
-and it is adequate with caveats:
+**NOT (primarily) the owner's laptop.** i5-1135G7 / 8GB / Iris Xe / Win 11.
+CPU-only, it would take ~5–8 min per 8-min video and fight the OS for RAM.
+It has a role (orchestration + staging, §5) but it is **not** where frames
+get processed.
 
-- **8GB is tight.** faster-whisper's larger models will not fit alongside a
-  browser and the OS. Pin the `small` or `base` model, not `medium`/`large`.
-- **CPU-only ⇒ slow.** Expect roughly 5–8 minutes of processing per
-  8 minutes of source video. This is fine for a **batch-at-night** rhythm,
-  and unacceptable for "watch it render." Design for the former (§5).
-- **It is the owner's daily-driver laptop.** Processing must be a job the
-  owner *starts* and walks away from — not a daemon competing with normal
-  use. A `docker compose run` invocation, not an always-on service.
+**The heavy lifting runs on Kaggle's free GPU tier — reusing the
+remote-exec pattern from `macal-empire-image-forge`.** That repo already
+runs LoRA training and ComfyUI end-to-end at $0 on Kaggle (T4×2 / P100,
+~30 hrs/week, no credit card). The mechanism is directly reusable here:
 
-If the laptop proves too slow at the owner's real volume, the escalation
-path is a **separate cheap VPS** (a second Hetzner instance, or a
-GPU-by-the-hour box run only during batch windows) — explicitly *not* the
-production box. This is a cost decision to revisit with real numbers, not a
-day-one purchase.
+- **`kaggle/remote_exec_bridge.py`** — a stdlib HTTP server pasted into one
+  Kaggle cell, exposed over a Cloudflare quick tunnel. It gives an agent
+  `/upload`, `/exec` (sync or backgrounded with `/jobs/<id>` polling),
+  `/download`, `/list`. This is *already* how this org drives a remote free
+  GPU. The editing stage is a new payload for the identical bridge:
+  `/upload` the source video → `/exec` the OpenShorts run in background →
+  poll → `/download` the finished clips.
+- **`kaggle/generate_notebook.py`** — the same generator approach produces
+  the setup notebook (the `.ipynb` is a build artifact, the Python is what's
+  reviewed). We add a `MACAL_Empire_AutoEdit_Setup.ipynb` sibling that
+  installs OpenShorts + FFmpeg + faster-whisper instead of ComfyUI + SDXL.
+
+**Why this is the right call, not just the reuse-y one.** On a T4, an 8-min
+video processes in roughly **50 seconds** versus ~5–8 minutes CPU-only —
+about an order of magnitude, which is the difference between "clip a week's
+footage over coffee" and "leave the laptop grinding overnight." It is $0,
+it is a pattern the owner has already operated and debugged, and it keeps
+the heavy workload entirely off both production hosts.
+
+**Known limits of the free GPU, carried over from the image-forge
+experience:**
+
+- **30 GPU-hours/week.** At ~50s/video this is hundreds of videos/week —
+  a non-issue at any realistic volume. Tracked, not assumed.
+- **Sessions are ephemeral (max ~12h, then reclaimed).** Fine for a
+  batch-and-download model; nothing persistent lives on Kaggle. The bridge
+  is torn down with the session.
+- **The bridge has no auth** (documented in `remote_exec_bridge.py`): the
+  Cloudflare quick-tunnel URL is an unguessable temporary root shell. Same
+  handling rule as image-forge — only shared in-session, torn down when the
+  batch finishes, never committed.
+
+**Escalation path, if the free tier ever becomes the bottleneck:** a
+GPU-by-the-hour box during batch windows — explicitly *not* the production
+box, and only once real volume numbers justify a paid line item.
 
 ---
 
-## 4. The one recurring external dependency: Gemini
+## 4. Moment-scoring: Gemini free tier, or local Ollama (already installed)
 
-OpenShorts uses Google Gemini 3.1 Flash-Lite to score the transcript and
-pick the strongest 3–15 moments. This is the only call that leaves the
-machine, and it is **free within limits**: Gemini's free tier covers ~1,500
-requests/day, and one video is a handful of requests. At the owner's volume
-this stays inside the free tier indefinitely.
+OpenShorts scores the transcript to pick the strongest 3–15 moments. That
+scoring is the one step that wants an LLM. There are two $0 ways to do it,
+and the audit found the org already runs the second:
 
-Consequences, consistent with the ecosystem's standing rules:
+**Option A — Gemini free tier (OpenShorts default).** Gemini 3.1 Flash-Lite,
+~1,500 requests/day free; one video is a handful of requests, so this sits
+inside the free tier indefinitely. Simplest path, one external dependency.
 
-1. **The Gemini API key is a credential.** It lives in the editing stage's
-   local `.env` on the PC — never in this repo, never in a committed doc,
-   never in workflow JSON. Same rule that governs the six publishing
-   credentials. The org has leaked real secrets from `n8n-workflows/`
-   before; this key does not get a pass.
-2. **The transcript leaves the machine.** Gemini sees the words spoken in
-   the video (not the video itself). For public teaching content this is
-   acceptable. It is called out here so the decision is on the record rather
-   than discovered later.
-3. **Free-tier failure is silent** — the same failure class the publishing
-   design flags for token expiry. If the key is throttled or revoked, clips
-   silently stop being produced. The batch job (§5) must alert on zero
-   output, reusing the existing Telegram watchdog channel from
-   `server-hardening/06-monitoring-setup.sh`.
+**Option B — local Ollama (already set up on the PC).** `macal-overseer`
+already installs Ollama + `qwen3:8b` on the same Windows machine and drives
+it for its agent. Moment-scoring is a plain "rank these transcript
+segments" prompt — well within `qwen3:8b`'s ability. Using it means
+**zero external dependency and nothing leaves the machine**: no API key to
+leak, expire, or throttle. The transcript is scored locally before the
+video ever goes to Kaggle (only the already-non-sensitive video frames go to
+the GPU; the words stay home).
+
+**Recommendation:** default to **Option B** where the scoring prompt is
+simple enough — it is strictly more private and removes a credential and a
+silent-failure mode. Keep Gemini as the drop-in fallback if local scoring
+quality proves weak on real footage (decide empirically, §7). Either way:
+
+1. **Any API key is a credential** — local `.env` only, never in this repo,
+   a committed doc, or workflow JSON. The org has leaked real secrets from
+   `n8n-workflows/` before; this gets no pass. (Option B has no key at all,
+   which is the point.)
+2. **Scoring failure is silent** — same class the publishing design flags
+   for token expiry. If scoring returns nothing, clips silently stop. The
+   batch job (§5) alerts on zero output via the existing Telegram watchdog
+   (`server-hardening/06-monitoring-setup.sh`).
 
 ---
 
 ## 5. The pipeline
 
+The laptop **orchestrates and stages**; Kaggle's free GPU **processes**. The
+laptop role reuses machinery already present in `macal-overseer` (a
+`watchdog` file monitor over an inbox folder, and the Tailscale/Cloudflare
+mesh that already links the PC and the Hetzner box).
+
 ```
 Owner films a long video
               ↓
-Owner drops the file into a local "inbox" folder on the PC     ← the only manual step
+Owner drops it into inbox/<routing-folder>/ on the PC          ← the only manual decision
               ↓
-      Nightly batch job (owner starts it, or a scheduled task)
+   [PC] watchdog picks it up (macal-overseer pattern) → queued for the next batch
               ↓
-      OpenShorts: transcribe → score moments → cut → reframe 9:16 → caption → hook
+   [PC] batch runner (owner-started or scheduled):
+          • score transcript locally with Ollama qwen3   (§4 Option B, stays on-machine)
+          • open a Kaggle GPU session, paste remote_exec_bridge.py
+          • /upload video + scores  →  /exec OpenShorts (background)  →  poll /jobs
               ↓
-      N finished 9:16 clips written to the correct Drive routing folder
+   [Kaggle T4] transcribe · cut · reframe 9:16 · burn captions · hook  (~50s / 8-min video)
               ↓
-      ══════════ hand-off ══════════  (existing SOCIAL-PUBLISHING pipeline takes over)
+   [PC] /download the finished clips  →  write to the matching Drive routing folder
               ↓
-      n8n Drive trigger → R2 stage → caption draft → Telegram approve → fan out to 6 destinations
+   ══════════ hand-off ══════════  (existing SOCIAL-PUBLISHING pipeline takes over)
+              ↓
+   [Hetzner n8n] Drive trigger → R2 stage → caption draft → Telegram approve → fan out to 6
 ```
 
-**The manual step shrinks, it does not vanish.** The owner still makes one
-decision per source video: *which routing folder does its clips go to?* That
-is the same brand-routing decision the publishing design already relies on,
-and it is safety-critical (§6). It is made once per long video, not once per
-clip — a 60-minute talk yielding 10 clips is **one** routing decision, not
-ten.
+**The manual step shrinks, it does not vanish.** The owner makes exactly one
+decision per source video: *which routing folder?* — the same
+safety-critical brand decision the publishing design already relies on (§6),
+made once per long video, not once per clip.
 
-**Why a batch job, not a folder-watcher.** A watcher that fires the moment a
-file lands would run heavy processing at unpredictable times on the owner's
-active laptop. A batch window (e.g. overnight, or "run before bed") matches
-the hardware reality in §3 and matches the publishing design's own
-philosophy — it already prefers a "batch approve once, drip all week"
-rhythm over a per-item obligation.
+**Caption + hashtag style is not invented here — it is reused.** The org
+already has a written brand caption library and a fixed hashtag block in
+`empire-nexus/.../data/tiktok-captions-en.md` (and the Arabic file). Any
+caption/hook the stage drafts uses those as the style reference and appends
+the existing fixed hashtag set, rather than generating a generic voice from
+scratch. RTL captions still pass the ecosystem bidi rule before being burned
+in (§8) — and because captions are burned *into* the frame here, that check
+matters on-screen, not just in post copy.
+
+**Why a batch job, not a per-file watcher-trigger.** The `watchdog` monitor
+*detects* new files immediately (that part is cheap and local), but it only
+*queues* them — it does not open a GPU session per file. Processing happens
+in a batch window (overnight, or "run before bed"), which matches the
+Kaggle session model (spin up, process the queue, tear down) and the
+publishing design's own "batch approve once, drip all week" philosophy.
+Opening a fresh Kaggle session per dropped file would waste the 30h/week
+quota on setup overhead.
 
 ---
 
@@ -227,37 +295,42 @@ this stage just produces one clip file per moment, as before.
 
 ## 7. Build order
 
-Sequenced so the riskiest assumption (does the laptop cope?) is tested
-first, and nothing here starts before the credential prerequisites the
-downstream design already documents.
+Sequenced so the riskiest assumption (does OpenShorts run cleanly headless
+on a Kaggle GPU session?) is tested first, reusing the image-forge bridge so
+step 1 is mostly proving a payload, not building infrastructure.
 
-1. **Prove the hardware.** Install Docker + WSL2 on the PC, run OpenShorts
-   self-hosted against **one** real long video with the `base` Whisper
-   model. Measure wall-clock time and peak RAM. This single data point
-   decides whether §3's "laptop" plan holds or the "separate VPS"
-   escalation is needed. Everything else waits on this.
-2. **Wire the inbox → Drive folders.** The three-subfolder inbox, and the
-   output writing into the same three Drive routing folders the publishing
+1. **Prove the Kaggle path.** Reuse `remote_exec_bridge.py`: open a free
+   Kaggle GPU session, `/upload` **one** real long video, `/exec` an
+   OpenShorts run in the background, poll, `/download` the clips. Measure
+   wall-clock time and confirm output quality on a T4. This single data
+   point confirms §3 or triggers the Plan-B parts-based CLI (§2). Everything
+   else waits on this. The image-forge setup notebook is the template for
+   the auto-edit setup notebook.
+2. **Wire the inbox → Drive folders.** The three-subfolder inbox on the PC
+   (reusing the `macal-overseer` `watchdog` monitor), and the `/download`
+   step writing into the same three Drive routing folders the publishing
    trigger watches. At this point the two pipelines are connected end to
-   end, even if still triggered by hand.
-3. **Batch runner + zero-output alert.** A single command (or Windows
-   scheduled task) that processes each inbox subfolder and alerts via the
-   existing Telegram watchdog if a run produces zero clips (§4).
-4. **Tune moment-selection + caption style.** Last, and deliberately so —
-   same reasoning as the publishing design putting caption generation last:
-   it saves the least time and needs the most iteration to stop looking
-   generic. Hook-text tone per brand (EEC teacherly vs MACAL founder voice)
-   is tuning, not plumbing.
+   end, even if the batch is still started by hand.
+3. **Batch runner + zero-output alert.** One command (or Windows scheduled
+   task) that drains each inbox subfolder through a Kaggle session and
+   alerts via the existing Telegram watchdog if a run yields zero clips
+   (§4). Reuse `macal-overseer`'s daemon/audit-log scaffolding rather than a
+   new service.
+4. **Tune moment-selection + caption style.** Last, deliberately — same
+   reasoning as the publishing design putting caption generation last. Wire
+   the existing `tiktok-captions-*.md` brand library + fixed hashtag block
+   in as the style reference (§5); tune hook tone per brand (EEC teacherly
+   vs MACAL founder voice). Tuning, not plumbing.
 
 ---
 
 ## 8. Open decisions
 
-- **Whisper model size vs 8GB RAM.** `base` almost certainly fits; `small`
-  is the stretch target for better caption accuracy. Decide empirically in
-  step 1, not now. If neither is acceptable and clips are unusable, that is
-  the trigger for the separate-VPS escalation, not a reason to touch the
-  production box.
+- **Whisper model size on Kaggle.** On a T4 the GPU has ~15GB VRAM, so the
+  RAM ceiling that constrained the laptop plan is gone — `medium` or even
+  `large-v3` are viable for better caption accuracy. Confirm the
+  quality/speed trade in step 1. (The laptop no longer runs Whisper, so its
+  8GB is irrelevant to model choice.)
 - **Caption language per brand.** Inherited open question from the
   publishing design: if EEC captions are Arabic, generated hashtags must
   obey the ecosystem bidi rule (no Arabic line with 2+ embedded LTR tokens).
