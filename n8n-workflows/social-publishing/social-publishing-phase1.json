@@ -1,0 +1,249 @@
+{
+  "name": "Social Publishing — Phase 1 (Drive → YouTube + Instagram)",
+  "nodes": [
+    {
+      "parameters": {
+        "pollTimes": { "item": [ { "mode": "everyMinute" } ] },
+        "triggerOn": "specificFolder",
+        "folderToWatch": "={{ $env.DRIVE_OUTPUT_FOLDER_ID }}",
+        "event": "fileCreated",
+        "options": { "includeSubfolders": true }
+      },
+      "id": "drive-trigger",
+      "name": "Drive Trigger: new clip",
+      "type": "n8n-nodes-base.googleDriveTrigger",
+      "typeVersion": 1,
+      "position": [ 240, 400 ],
+      "credentials": { "googleDriveOAuth2Api": { "name": "Google Drive - empire" } }
+    },
+    {
+      "parameters": {
+        "jsBlock": "// Only act on video files; ignore the sibling metadata.json and anything else.\nconst f = $json;\nconst name = (f.name || '').toLowerCase();\nconst isVideo = /\\.(mp4|mov|mkv|webm)$/.test(name);\nif (!isVideo) { return []; }\n\n// Routing is derived ONLY from the parent Drive folder name (design §2).\n// The batch runner writes into these three folders, one-to-one.\nconst folderName = (f.parents_folder_name || f.folderName || '').trim();\n\nlet brand_origin, destinations;\nif (folderName === '01-EEC-only') {\n  brand_origin = 'EEC';\n  destinations = [ {brand:'EEC', platform:'youtube'}, {brand:'EEC', platform:'instagram'} ];\n} else if (folderName === '02-EEC-and-MACAL') {\n  brand_origin = 'EEC'; // origin is EEC; MACAL is a cross-post of EEC content (allowed direction)\n  destinations = [ {brand:'EEC', platform:'youtube'}, {brand:'EEC', platform:'instagram'}, {brand:'MACAL', platform:'instagram', staggered:true} ];\n} else if (folderName === '03-MACAL-only') {\n  brand_origin = 'MACAL';\n  destinations = [ {brand:'MACAL', platform:'instagram'} ];\n} else {\n  // Unknown folder -> refuse to route (fail closed).\n  throw new Error('Unrecognized routing folder: ' + folderName + ' — refusing to publish.');\n}\n\nreturn [ { json: {\n  file_id: f.id,\n  file_name: f.name,\n  folder: folderName,\n  brand_origin,\n  destinations\n} } ];"
+      },
+      "id": "classify",
+      "name": "Classify (folder → brand + destinations)",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [ 480, 400 ]
+    },
+    {
+      "parameters": {
+        "jsBlock": "// GUARD (design §2, guard 2): pre-publish assertion, fail-closed.\n// The forbidden direction MACAL-origin -> any EEC destination aborts the WHOLE job.\nconst { brand_origin, destinations } = $json;\nif (brand_origin === 'MACAL' && destinations.some(d => d.brand === 'EEC')) {\n  throw new Error('BLOCKED: MACAL-origin content resolved an EEC destination. Aborting entire job (no partial publish).');\n}\nif (!Array.isArray(destinations) || destinations.length === 0) {\n  throw new Error('No destinations resolved — aborting.');\n}\nreturn [ { json: $json } ];"
+      },
+      "id": "guard",
+      "name": "Guard: brand routing (fail-closed)",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [ 720, 400 ]
+    },
+    {
+      "parameters": {
+        "operation": "download",
+        "fileId": { "__rl": true, "value": "={{ $json.file_id }}", "mode": "id" },
+        "options": { "binaryPropertyName": "clip" }
+      },
+      "id": "download-clip",
+      "name": "Download clip (bytes)",
+      "type": "n8n-nodes-base.googleDrive",
+      "typeVersion": 3,
+      "position": [ 960, 400 ],
+      "credentials": { "googleDriveOAuth2Api": { "name": "Google Drive - empire" } }
+    },
+    {
+      "parameters": {
+        "rules": {
+          "values": [
+            { "conditions": { "options": { "caseSensitive": true }, "conditions": [ { "leftValue": "={{ $json.brand_origin }}", "rightValue": "EEC", "operator": { "type": "string", "operation": "equals" } } ] }, "outputKey": "EEC" },
+            { "conditions": { "options": { "caseSensitive": true }, "conditions": [ { "leftValue": "={{ $json.brand_origin }}", "rightValue": "MACAL", "operator": { "type": "string", "operation": "equals" } } ] }, "outputKey": "MACAL" }
+          ]
+        },
+        "options": {}
+      },
+      "id": "switch-brand",
+      "name": "Switch: brand branch",
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 3,
+      "position": [ 1200, 400 ]
+    },
+
+    {
+      "parameters": {
+        "resource": "video",
+        "operation": "upload",
+        "title": "={{ $json.yt_title || $json.file_name }}",
+        "regionCode": "US",
+        "categoryId": "27",
+        "options": { "privacyStatus": "public", "description": "={{ $json.yt_description || '' }}" }
+      },
+      "id": "yt-eec",
+      "name": "YouTube EEC: upload (Short)",
+      "type": "n8n-nodes-base.youTube",
+      "typeVersion": 1,
+      "position": [ 1460, 260 ],
+      "credentials": { "youTubeOAuth2Api": { "name": "YouTube - EEC" } }
+    },
+
+    {
+      "parameters": {
+        "operation": "upload",
+        "bucketName": "={{ $env.R2_BUCKET }}",
+        "fileName": "=staging/{{ $json.file_id }}-{{ $json.file_name }}",
+        "binaryPropertyName": "clip",
+        "additionalFields": {}
+      },
+      "id": "r2-stage-eec",
+      "name": "R2 stage (EEC IG)",
+      "type": "n8n-nodes-base.s3",
+      "typeVersion": 1,
+      "position": [ 1460, 420 ],
+      "credentials": { "s3": { "name": "R2 - social-staging" } }
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "=https://graph.instagram.com/v21.0/{{ $env.IG_EEC_USER_ID }}/media",
+        "sendQuery": true,
+        "queryParameters": { "parameters": [
+          { "name": "media_type", "value": "REELS" },
+          { "name": "video_url", "value": "={{ $env.R2_PUBLIC_BASE }}/staging/{{ $json.file_id }}-{{ $json.file_name }}" },
+          { "name": "caption", "value": "={{ $json.ig_caption || '' }}" }
+        ] },
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "options": {}
+      },
+      "id": "ig-eec-container",
+      "name": "IG EEC: create REELS container",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [ 1680, 420 ],
+      "credentials": { "httpHeaderAuth": { "name": "IG - EEC" } }
+    },
+    {
+      "parameters": { "amount": 30, "unit": "seconds" },
+      "id": "ig-eec-wait",
+      "name": "IG EEC: wait for processing",
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1,
+      "position": [ 1900, 420 ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "=https://graph.instagram.com/v21.0/{{ $env.IG_EEC_USER_ID }}/media_publish",
+        "sendQuery": true,
+        "queryParameters": { "parameters": [ { "name": "creation_id", "value": "={{ $json.id }}" } ] },
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "options": {}
+      },
+      "id": "ig-eec-publish",
+      "name": "IG EEC: publish",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [ 2120, 420 ],
+      "credentials": { "httpHeaderAuth": { "name": "IG - EEC" } }
+    },
+
+    {
+      "parameters": {
+        "operation": "upload",
+        "bucketName": "={{ $env.R2_BUCKET }}",
+        "fileName": "=staging/{{ $json.file_id }}-macal-{{ $json.file_name }}",
+        "binaryPropertyName": "clip",
+        "additionalFields": {}
+      },
+      "id": "r2-stage-macal",
+      "name": "R2 stage (MACAL IG)",
+      "type": "n8n-nodes-base.s3",
+      "typeVersion": 1,
+      "position": [ 1460, 640 ],
+      "credentials": { "s3": { "name": "R2 - social-staging" } }
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "=https://graph.instagram.com/v21.0/{{ $env.IG_MACAL_USER_ID }}/media",
+        "sendQuery": true,
+        "queryParameters": { "parameters": [
+          { "name": "media_type", "value": "REELS" },
+          { "name": "video_url", "value": "={{ $env.R2_PUBLIC_BASE }}/staging/{{ $json.file_id }}-macal-{{ $json.file_name }}" },
+          { "name": "caption", "value": "={{ $json.ig_caption_macal || $json.ig_caption || '' }}" }
+        ] },
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "options": {}
+      },
+      "id": "ig-macal-container",
+      "name": "IG MACAL: create REELS container",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [ 1680, 640 ],
+      "credentials": { "httpHeaderAuth": { "name": "IG - MACAL" } }
+    },
+    {
+      "parameters": { "amount": 30, "unit": "seconds" },
+      "id": "ig-macal-wait",
+      "name": "IG MACAL: wait for processing",
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1,
+      "position": [ 1900, 640 ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "=https://graph.instagram.com/v21.0/{{ $env.IG_MACAL_USER_ID }}/media_publish",
+        "sendQuery": true,
+        "queryParameters": { "parameters": [ { "name": "creation_id", "value": "={{ $json.id }}" } ] },
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "options": {}
+      },
+      "id": "ig-macal-publish",
+      "name": "IG MACAL: publish",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [ 2120, 640 ],
+      "credentials": { "httpHeaderAuth": { "name": "IG - MACAL" } }
+    },
+
+    {
+      "parameters": {
+        "operation": "append",
+        "documentId": { "__rl": true, "value": "={{ $env.LEDGER_SHEET_ID }}", "mode": "id" },
+        "sheetName": { "__rl": true, "value": "ledger", "mode": "name" },
+        "columns": { "mappingMode": "autoMapInputData", "value": {} },
+        "options": {}
+      },
+      "id": "ledger",
+      "name": "Ledger: append row",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4,
+      "position": [ 2360, 400 ],
+      "credentials": { "googleSheetsOAuth2Api": { "name": "Google Sheets - ledger" } }
+    }
+  ],
+  "connections": {
+    "Drive Trigger: new clip": { "main": [ [ { "node": "Classify (folder → brand + destinations)", "type": "main", "index": 0 } ] ] },
+    "Classify (folder → brand + destinations)": { "main": [ [ { "node": "Guard: brand routing (fail-closed)", "type": "main", "index": 0 } ] ] },
+    "Guard: brand routing (fail-closed)": { "main": [ [ { "node": "Download clip (bytes)", "type": "main", "index": 0 } ] ] },
+    "Download clip (bytes)": { "main": [ [ { "node": "Switch: brand branch", "type": "main", "index": 0 } ] ] },
+    "Switch: brand branch": { "main": [
+      [ { "node": "YouTube EEC: upload (Short)", "type": "main", "index": 0 }, { "node": "R2 stage (EEC IG)", "type": "main", "index": 0 } ],
+      [ { "node": "R2 stage (MACAL IG)", "type": "main", "index": 0 } ]
+    ] },
+    "R2 stage (EEC IG)": { "main": [ [ { "node": "IG EEC: create REELS container", "type": "main", "index": 0 } ] ] },
+    "IG EEC: create REELS container": { "main": [ [ { "node": "IG EEC: wait for processing", "type": "main", "index": 0 } ] ] },
+    "IG EEC: wait for processing": { "main": [ [ { "node": "IG EEC: publish", "type": "main", "index": 0 } ] ] },
+    "IG EEC: publish": { "main": [ [ { "node": "Ledger: append row", "type": "main", "index": 0 } ] ] },
+    "YouTube EEC: upload (Short)": { "main": [ [ { "node": "Ledger: append row", "type": "main", "index": 0 } ] ] },
+    "R2 stage (MACAL IG)": { "main": [ [ { "node": "IG MACAL: create REELS container", "type": "main", "index": 0 } ] ] },
+    "IG MACAL: create REELS container": { "main": [ [ { "node": "IG MACAL: wait for processing", "type": "main", "index": 0 } ] ] },
+    "IG MACAL: wait for processing": { "main": [ [ { "node": "IG MACAL: publish", "type": "main", "index": 0 } ] ] },
+    "IG MACAL: publish": { "main": [ [ { "node": "Ledger: append row", "type": "main", "index": 0 } ] ] }
+  },
+  "settings": { "executionOrder": "v1" },
+  "staticData": null,
+  "tags": [ { "name": "social-publishing" } ],
+  "triggerCount": 1
+}
