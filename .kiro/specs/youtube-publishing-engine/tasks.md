@@ -79,7 +79,14 @@
 - [ ] **3.1 Custom thumbnail upload** (long-form; Shorts optional). [engagement/CTR]
 - [ ] **3.2 Post-publish velocity check** (24h underperformance flag). [R5.3]
 - [ ] **3.3 Playlist assignment / end-screen linking** (session time). [algorithm]
-- [ ] **3.4 Quota guard** — pre-flight quota check; defer non-critical ops. [R6.1, R6.3]
+- [x] **3.4 Quota guard** — pre-flight quota check; defer non-critical ops. [R6.1, R6.3]
+
+
+> **Phase 3 build status (2026-09-16):** 3.4 Quota guard BUILT + live in
+> `RdtmJTVYU4jFFCvF` (Build YT metadata → Quota guard → upload; daily cap via
+> `YT_MAX_UPLOADS_PER_DAY`, default 5). 3.2 velocity-flagging covered by the
+> active Analytics workflow (`DsFwgIXvA36lJtee`). 3.1 thumbnails + 3.3 playlists
+> deferred — need owner-provided thumbnail sources / target playlists.
 
 ## Cross-cutting (every phase)
 - [ ] Keep `n8n_validate_workflow` at 0 errors after each change.
