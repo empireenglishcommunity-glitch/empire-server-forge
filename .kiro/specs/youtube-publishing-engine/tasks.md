@@ -44,21 +44,35 @@
 
 ## Phase 2 — Engagement & learning loops
 
-- [ ] **2.1 Fetch + parse the `<clip>_metadata.json` sidecar from Drive.** [R1.2]
+- [x] **2.1 Fetch + parse the `<clip>_metadata.json` sidecar from Drive.** [R1.2]
   - Drive search for `<basename>_metadata.json` → download → parse → merge into
     item as `metadata` so rich AI copy flows automatically from Kaggle clips.
 
-- [ ] **2.2 Comment reply loop — poll + AI draft.** [R4.1, R4.2]
+- [x] **2.2 Comment reply loop — poll + AI draft.** [R4.1, R4.2]
   - New Schedule-triggered workflow; `commentThreads.list` with watermark;
     AI draft (Gemini/Ollama), language-matched, varied.
 
-- [ ] **2.3 Telegram approval → post reply.** [R4.3, R4.4, R4.5]
+- [x] **2.3 Telegram approval → post reply.** [R4.3, R4.4, R4.5]
   - Approve/reject card via admin-bot; on ✅ `comments.insert` as channel;
     discard on ✖; watermark advance.
 
-- [ ] **2.4 Analytics feedback loop.** [R5.2, R5.3]
+- [x] **2.4 Analytics feedback loop.** [R5.2, R5.3]
   - Daily YouTube Analytics pull per recent video → ledger; threshold →
     Telegram flag.
+
+
+
+> **Phase 2 build status (2026-09-16):** All Phase-2 workflows built + validated
+> (0 errors) via n8n-MCP. Live workflow ids:
+> - Sidecar fetch: integrated into `RdtmJTVYU4jFFCvF` (Find→Download→Attach metadata).
+> - Comment reply (poll+approval): `YYw4KaTWgVM56M4q` — **INACTIVE**.
+> - Comment reply (callback handler): `1lFliVTmOd2Z94dx` — **INACTIVE**.
+> - Analytics feedback (daily): `DsFwgIXvA36lJtee` — **INACTIVE**.
+>
+> **Activation prerequisites (owner-provided env vars in /opt/n8n/docker-compose.yml):**
+> `YT_CHANNEL_ID` (EEC channel id), `YT_APPROVAL_CHAT_ID` (admin Telegram chat id),
+> optional `YT_MIN_AVG_VIEW_PCT` (default 30). Add an `analytics` tab to the ledger sheet.
+> Kept inactive until provided + reviewed (posting comments is policy-sensitive).
 
 ## Phase 3 — Polish & optimization
 
