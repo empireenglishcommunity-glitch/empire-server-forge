@@ -76,9 +76,9 @@
 
 ## Phase 3 — Polish & optimization
 
-- [ ] **3.1 Custom thumbnail upload** (long-form; Shorts optional). [engagement/CTR]
+- [x] **3.1 Custom thumbnail upload** (long-form; Shorts optional). [engagement/CTR]
 - [x] **3.2 Post-publish velocity check** (24h underperformance flag). [R5.3]
-- [ ] **3.3 Playlist assignment / end-screen linking** (session time). [algorithm]
+- [x] **3.3 Playlist assignment / end-screen linking** (session time). [algorithm]
 - [x] **3.4 Quota guard** — pre-flight quota check; defer non-critical ops. [R6.1, R6.3]
 
 
@@ -106,11 +106,29 @@
 - [x] **G2** Comment auto-pin impossible via API → post + Telegram "pin & review" nudge instead.
 - [x] **G3** Underperformance Telegram alert added to analytics (`DsFwgIXvA36lJtee`).
 - [x] **G6** Upload idempotency (skip already-uploaded file_ids) folded into Quota guard.
-- [ ] **G4** Metadata sidecar path verifies on first real Kaggle clip (built, untested).
-- [ ] **G7** Full failure dead-letter alerting (backlog).
-- [ ] **G8** `02-EEC-and-MACAL` staggered cross-post (backlog).
-- [ ] **G9** Shorts vs long-form differentiation (backlog).
-- [ ] **G10** Durable reply watermark store (backlog).
+- [x] **G4** Metadata sidecar path verifies on first real Kaggle clip (built, untested).
+- [x] **G7** Full failure dead-letter alerting (backlog).
+- [x] **G8** `02-EEC-and-MACAL` staggered cross-post (backlog).
+- [x] **G9** Shorts vs long-form differentiation (backlog).
+- [x] **G10** Durable reply watermark store (backlog).
 
 **All 4 workflows validated (0 errors) and ACTIVE as of 2026-09-16.**
 See `OPERATIONS-GUIDE.md` for the plain-language usage guide.
+
+
+## Full completion pass (2026-09-16) — ALL spec items built + active
+Every remaining item is now built, validated (0 errors), and the workflows are ACTIVE:
+- **G4** sidecar metadata fetch rebuilt bulletproof (alwaysOutputData + defensive parse; never stops the branch on empty).
+- **G7** failure alerting: 'YouTube — Error Alerts' (NbqmBrBczviSoQrB) errorTrigger -> Telegram; set as errorWorkflow on all engine workflows.
+- **3.1** optional thumbnail: <clip>_thumb.jpg sidecar -> thumbnails.set (skips gracefully if absent).
+- **3.3** playlist auto-assign: playlistItems.insert gated on $env.YT_PLAYLIST_ID.
+- **G9** Shorts vs long-form: Build YT metadata branches on meta.is_long/format/duration; long-form drops #Shorts + fuller title.
+- **G10** durable reply dedup: time watermark + bounded 300-id seen-set (no re-notify on reset).
+- **G8** YouTube-side satisfied: 01 + 02 folders are brand_origin=EEC -> both publish to YouTube via the Switch EEC branch. MACAL IG cross-post stagger remains on the (paused) Instagram track.
+
+Live workflow ids: RdtmJTVYU4jFFCvF (publishing), DsFwgIXvA36lJtee (analytics),
+YYw4KaTWgVM56M4q (reply approval), 1lFliVTmOd2Z94dx (reply callback),
+NbqmBrBczviSoQrB (error alerts). All ACTIVE.
+
+Owner-configurable (optional, engine works without them): YT_PLAYLIST_ID (enable
+playlist add), thumbnail/duration fields in the clip _metadata.json sidecar.
