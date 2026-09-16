@@ -132,3 +132,12 @@ NbqmBrBczviSoQrB (error alerts). All ACTIVE.
 
 Owner-configurable (optional, engine works without them): YT_PLAYLIST_ID (enable
 playlist add), thumbnail/duration fields in the clip _metadata.json sidecar.
+
+
+
+## Platform separation (2026-09-16) — one workflow per platform
+Per owner decision, each platform is now its own workflow (cleaner, isolated, safer):
+- **YouTube — Publishing** (`RdtmJTVYU4jFFCvF`, renamed from "Social Publishing — Phase 1"): YouTube-only, active. Orphaned Instagram nodes removed. Full YouTube flow verified intact + valid.
+- **Instagram — Publishing (paused)** (`kniPc1mwHllJVDih`): the Instagram work **migrated** (not deleted) into its own workflow — Drive trigger → Classify → Guard → Download → Switch → R2 stage → IG container → wait → gate → publish → ledger. Inactive (IG track paused pending re-enable; faststart fix already in empire-video-forge PR #7).
+- YouTube support workflows unchanged + active: Comment Reply (approval `YYw4KaTWgVM56M4q`, callback `1lFliVTmOd2Z94dx`), Analytics (`DsFwgIXvA36lJtee`), Error Alerts (`NbqmBrBczviSoQrB`).
+- **TikTok** (future): to be built as its own separate workflow, same pattern.
