@@ -162,3 +162,42 @@ swipe-away) recorded, so we learn what works and improve.
 **Acceptance criteria:**
 1. THE YouTube path SHALL run independently of the Instagram branch so IG errors
    never block or fail a YouTube publish.
+
+
+
+---
+
+## Audit findings (2026-09-16) — gaps discovered after Phase 1–3 build
+
+An honest review found the following gaps between what was *specified* and what
+was *built*, plus items the spec itself missed. Tracked here for transparency.
+
+### Gaps vs. stated requirements
+- **G1 (R4.2) — reply drafting was NOT real AI.** The comment-reply loop used a
+  fixed opener pool, not Gemini. **FIXED:** wired the `Google Gemini(PaLM)`
+  credential to generate contextual, language-matched, varied replies.
+- **G2 (R2.2) — comment was posted but not actually pinned.** **FIXED:** added a
+  `comments.setModerationStatus`/pin call (best-effort, non-fatal).
+- **G3 (R5.3) — analytics flagged underperformers to the ledger but sent no
+  Telegram alert.** **FIXED:** added a Telegram notice on underperformance.
+- **G4 (R1.5) — metadata sidecar path built but never runtime-tested** (owner's
+  manual clips carry no sidecar). Verifies when a real Kaggle clip runs through.
+- **G5 (D5) — spec said "existing admin bot"; we used a dedicated `YouTube Ops
+  Bot`** to avoid trigger-consumer conflicts. Spec updated to reflect this.
+
+### Gaps the spec itself missed
+- **G6 — no upload idempotency.** Re-running the workflow re-uploaded the same
+  clip (duplicate YouTube videos). **FIXED:** processed-clip guard using workflow
+  static data keyed on `file_id`, so each clip uploads once.
+- **G7 — no failure alerting.** Upload/publish failures were silent. Partially
+  addressed via ledger; full dead-letter alerting deferred (G7 backlog).
+- **G8 — `02-EEC-and-MACAL` cross-post not built.** Switch routes by
+  `brand_origin=EEC`, so those clips post to EEC only; the staggered MACAL
+  cross-post is deferred (documented in BUILD-NOTES). Backlog.
+- **G9 — no Shorts vs long-form differentiation.** All clips treated as Shorts.
+  Long-form needs distinct titling + thumbnails. Backlog.
+- **G10 — reply watermark uses workflow static data.** If reset, could re-notify
+  old comments. Low risk; a durable store (ledger tab) is a future hardening.
+
+**Resolution:** G1, G2, G3, G6 fixed in this pass. G4 verifies on next real
+clip. G5 documented. G7–G10 are backlog items recorded for a future phase.

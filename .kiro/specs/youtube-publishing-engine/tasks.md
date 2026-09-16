@@ -77,7 +77,7 @@
 ## Phase 3 — Polish & optimization
 
 - [ ] **3.1 Custom thumbnail upload** (long-form; Shorts optional). [engagement/CTR]
-- [ ] **3.2 Post-publish velocity check** (24h underperformance flag). [R5.3]
+- [x] **3.2 Post-publish velocity check** (24h underperformance flag). [R5.3]
 - [ ] **3.3 Playlist assignment / end-screen linking** (session time). [algorithm]
 - [x] **3.4 Quota guard** — pre-flight quota check; defer non-critical ops. [R6.1, R6.3]
 
@@ -99,3 +99,18 @@
   PR #7; resumes on the IG track).
 - Rotating the leaked MCP `AUTH_TOKEN` + server SSH key (session cleanup).
 - Google quota-increase request (only if upload volume grows).
+
+
+## Gap-fix pass (2026-09-16) — post-audit
+- [x] **G1** Real Gemini AI drafting wired into comment-reply (`YYw4KaTWgVM56M4q`).
+- [x] **G2** Comment auto-pin impossible via API → post + Telegram "pin & review" nudge instead.
+- [x] **G3** Underperformance Telegram alert added to analytics (`DsFwgIXvA36lJtee`).
+- [x] **G6** Upload idempotency (skip already-uploaded file_ids) folded into Quota guard.
+- [ ] **G4** Metadata sidecar path verifies on first real Kaggle clip (built, untested).
+- [ ] **G7** Full failure dead-letter alerting (backlog).
+- [ ] **G8** `02-EEC-and-MACAL` staggered cross-post (backlog).
+- [ ] **G9** Shorts vs long-form differentiation (backlog).
+- [ ] **G10** Durable reply watermark store (backlog).
+
+**All 4 workflows validated (0 errors) and ACTIVE as of 2026-09-16.**
+See `OPERATIONS-GUIDE.md` for the plain-language usage guide.
