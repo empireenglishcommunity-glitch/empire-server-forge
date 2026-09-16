@@ -8,7 +8,11 @@
 
 ## Phase 1 — Algorithm-aware publishing (highest impact, lowest risk)
 
-- [ ] **1.1 Rebuild "Build YT metadata" node — Arabic-first, algorithm-aware.** [R1, D1]
+> **Build status (2026-09-16):** Tasks 1.1–1.4 built + validated (0 errors) on
+> live workflow `RdtmJTVYU4jFFCvF` via n8n-MCP. Task 1.5 (end-to-end run) needs
+> the owner to trigger the Drive-polling workflow once (cannot be fired via API).
+
+- [x] **1.1 Rebuild "Build YT metadata" node — Arabic-first, algorithm-aware.** [R1, D1]
   - Title: front-load keyword ≤60 chars, ≤100 total; source priority
     metadata→caption→clean filename.
   - Description: keyword in first 150 chars; Arabic-led body; CTA line; hashtag
@@ -18,18 +22,18 @@
   - Scheduling calc → `yt_publish_at` (next EET 19:00–22:00) when requested.
   - _Validate + unit-shape check._
 
-- [ ] **1.2 Wire YouTube upload node to the new fields + scheduling.** [R1, R3, D2]
+- [x] **1.2 Wire YouTube upload node to the new fields + scheduling.** [R1, R3, D2]
   - title/description/tags from Build YT metadata; `privacyStatus=private`;
     conditional `publishAt`.
   - _Validate._
 
-- [ ] **1.3 Add "YT: post pinned comment" after upload.** [R2]
+- [x] **1.3 Add "YT: post pinned comment" after upload.** [R2]
   - HTTP `commentThreads.insert` on the returned `videoId` as channel owner;
     best-effort pin; non-fatal on failure (ledger log).
   - Wire: YouTube upload → post comment → (continue to ledger).
   - _Validate._
 
-- [ ] **1.4 Extend ledger to record the YouTube publish.** [R5.1]
+- [x] **1.4 Extend ledger to record the YouTube publish.** [R5.1]
   - Append video id, title, scheduled/publishAt, timestamp, brand.
   - _Validate._
 
