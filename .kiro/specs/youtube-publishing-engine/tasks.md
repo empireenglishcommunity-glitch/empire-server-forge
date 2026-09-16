@@ -10,7 +10,7 @@
 
 > **Build status (2026-09-16):** Tasks 1.1–1.4 built + validated (0 errors) on
 > live workflow `RdtmJTVYU4jFFCvF` via n8n-MCP. Task 1.5 (end-to-end run) needs
-> the owner to trigger the Drive-polling workflow once (cannot be fired via API).
+> VERIFIED 2026-09-16 (exec 1884): all YouTube nodes succeeded — upload (video zggQ1aOkRto, private), Arabic metadata, pinned comment posted, ledger written. Title fell back to filename because the test clip had no _metadata.json sidecar (rich AI title arrives with Phase 2 Task 2.1).
 
 - [x] **1.1 Rebuild "Build YT metadata" node — Arabic-first, algorithm-aware.** [R1, D1]
   - Title: front-load keyword ≤60 chars, ≤100 total; source priority
@@ -37,7 +37,7 @@
   - Append video id, title, scheduled/publishAt, timestamp, brand.
   - _Validate._
 
-- [ ] **1.5 End-to-end verify Phase 1.** [R1, R2, R3, R7]
+- [x] **1.5 End-to-end verify Phase 1.** [R1, R2, R3, R7]
   - Run on a clip in `output/01-EEC-only/`; read execution via MCP; confirm
     enriched metadata, pinned comment posted, publishAt (if set); confirm YT
     path independent of IG branch.
